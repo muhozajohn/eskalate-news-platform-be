@@ -1,0 +1,285 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+// =============================================
+// ENUMS
+// =============================================
+
+enum UserRole {
+  reader
+  author
+  editor
+  admin
+}
+
+enum ArticleStatus {
+  draft
+  pending_review
+  published
+  archived
+  rejected
+}
+
+enum MediaType {
+  image
+  video
+  document
+}
+
+enum ReactionTarget {
+  article
+  comment
+}
+
+// =============================================
+// USER
+// =============================================
+
+model User {
+  id            Int      @id @default(autoincrement())
+  username      String   @unique
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  fullName      String?  @map("full_name")
+  bio           String?
+  avatarUrl     String?  @map("avatar_url")
+  role          UserRole @default(reader)
+  isActive      Boolean  @default(true)  @map("is_active")
+  isVerified    Boolean  @default(false) @map("is_verified")
+  refreshToken  String?  @map("refresh_token")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt       @map("updated_at")
+
+  // Relations
+  articles              Article[]
+  comments              Comment[]
+  likes                 Like[]
+  bookmarks             Bookmark[]
+  media                 Media[]
+  followers             Follow[]   @relation("Following")
+  following             Follow[]   @relation("Follower")
+  newsletterSubscription NewsletterSubscription?
+
+  @@map("users")
+}
+
+// =============================================
+// CATEGORY  (hierarchical)
+// =============================================
+
+model Category {
+  id          Int        @id @default(autoincrement())
+  name        String     @unique
+  slug        String     @unique
+  description String?
+  parentId    Int?       @map("parent_id")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  // Self-relation
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+
+  articles    Article[]
+
+  @@map("categories")
+}
+
+// =============================================
+// TAG
+// =============================================
+
+model Tag {
+  id        Int          @id @default(autoincrement())
+  name      String       @unique
+  slug      String       @unique
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  articles  ArticleTag[]
+
+  @@map("tags")
+}
+
+// =============================================
+// ARTICLE
+// =============================================
+
+model Article {
+  id            Int           @id @default(autoincrement())
+  title         String
+  slug          String        @unique
+  summary       String?
+  content       String
+  coverImageUrl String?       @map("cover_image_url")
+  status        ArticleStatus @default(draft)
+  authorId      Int           @map("author_id")
+  categoryId    Int?          @map("category_id")
+  viewCount     Int           @default(0) @map("view_count")
+  readingTime   Int?          @map("reading_time")
+  isFeatured    Boolean       @default(false) @map("is_featured")
+  publishedAt   DateTime?     @map("published_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt       @map("updated_at")
+
+  // Relations
+  author        User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  category      Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  tags          ArticleTag[]
+  comments      Comment[]
+  likes         Like[]        @relation("ArticleLikes")
+  bookmarks     Bookmark[]
+  media         Media[]
+
+  @@index([authorId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([publishedAt(sort: Desc)])
+  @@index([isFeatured])
+  @@map("articles")
+}
+
+// =============================================
+// ARTICLE <-> TAG  (junction)
+// =============================================
+
+model ArticleTag {
+  articleId Int @map("article_id")
+  tagId     Int @map("tag_id")
+
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, tagId])
+  @@index([tagId])
+  @@map("article_tags")
+}
+
+// =============================================
+// COMMENT  (threaded)
+// =============================================
+
+model Comment {
+  id         Int       @id @default(autoincrement())
+  body       String
+  authorId   Int       @map("author_id")
+  articleId  Int       @map("article_id")
+  parentId   Int?      @map("parent_id")
+  isApproved Boolean   @default(true) @map("is_approved")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt       @map("updated_at")
+
+  // Relations
+  author     User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  article    Article   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  parent     Comment?  @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    Comment[] @relation("CommentThread")
+  likes      Like[]    @relation("CommentLikes")
+
+  @@index([articleId])
+  @@index([parentId])
+  @@index([authorId])
+  @@map("comments")
+}
+
+// =============================================
+// LIKE  (polymorphic — article or comment)
+// =============================================
+
+model Like {
+  id          Int            @id @default(autoincrement())
+  userId      Int            @map("user_id")
+  targetType  ReactionTarget @map("target_type")
+  targetId    Int            @map("target_id")
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article     Article? @relation("ArticleLikes", fields: [targetId], references: [id], onDelete: Cascade, map: "likes_article_fk")
+  comment     Comment? @relation("CommentLikes", fields: [targetId], references: [id], onDelete: Cascade, map: "likes_comment_fk")
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@map("likes")
+}
+
+// =============================================
+// BOOKMARK
+// =============================================
+
+model Bookmark {
+  userId     Int      @map("user_id")
+  articleId  Int      @map("article_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, articleId])
+  @@map("bookmarks")
+}
+
+// =============================================
+// MEDIA
+// =============================================
+
+model Media {
+  id          Int       @id @default(autoincrement())
+  uploaderId  Int       @map("uploader_id")
+  url         String
+  type        MediaType @default(image)
+  filename    String?
+  sizeBytes   Int?      @map("size_bytes")
+  articleId   Int?      @map("article_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  uploader    User      @relation(fields: [uploaderId], references: [id])
+  article     Article?  @relation(fields: [articleId], references: [id], onDelete: SetNull)
+
+  @@map("media")
+}
+
+// =============================================
+// FOLLOW  (user <-> user)
+// =============================================
+
+model Follow {
+  followerId   Int      @map("follower_id")
+  followingId  Int      @map("following_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  follower     User     @relation("Follower",  fields: [followerId],  references: [id], onDelete: Cascade)
+  following    User     @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+// =============================================
+// NEWSLETTER SUBSCRIPTION
+// =============================================
+
+model NewsletterSubscription {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  userId    Int?     @unique @map("user_id")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("newsletter_subscriptions")
+}
